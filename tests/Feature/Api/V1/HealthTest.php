@@ -25,6 +25,7 @@ class HealthTest extends TestCase
             $timestamp
         );
     }
+
     public function test_it_returns_json_404_on_invalid_api_route(): void
     {
         $response = $this->getJson('/api/v1/invalid-route');
