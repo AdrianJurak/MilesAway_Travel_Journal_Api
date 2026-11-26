@@ -1,0 +1,95 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  lint-and-test:
+    name: Tests & Pint (PostgreSQL)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: testing
+          POSTGRES_USER: sail
+          POSTGRES_PASSWORD: password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U sail -d testing"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_pgsql, pgsql
+          coverage: none
+
+      - name: Prepare .env
+        run: php -r "file_exists('.env') || copy('.env.example', '.env');"
+
+      - name: Install Composer dependencies
+        run: composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
+
+      - name: Generate application key
+        run: php artisan key:generate
+
+      - name: Check code style (Laravel Pint)
+        run: ./vendor/bin/pint --test
+
+      - name: Run database migrations
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: testing
+          DB_USERNAME: sail
+          DB_PASSWORD: password
+        run: php artisan migrate --force
+
+      - name: Run PHPUnit tests
+        env:
+          APP_ENV: testing
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: testing
+          DB_USERNAME: sail
+          DB_PASSWORD: password
+        run: php artisan test
+
+  openapi-lint:
+    name: OpenAPI Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate docs/openapi.yaml
+        run: npx --yes @redocly/cli lint docs/openapi.yaml
+
+  docker-build:
+    name: Production Docker Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build production image
+        run: docker build -t milesaway-api:ci .

@@ -1,0 +1,1076 @@
+openapi: 3.0.3
+info:
+  title: MilesAway Travel Journal API
+  version: 1.0.0
+  description: |
+    Kontrakt REST API v1 dla aplikacji mobilnej i panelu MilesAway.
+
+    **Konwencje jednostek i formatów:**
+    - Daty i czas: ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`)
+    - Dystans: metry (`distance_m`, integer)
+    - Czas trwania: sekundy (`duration_s`, integer)
+    - Współrzędne geograficzne: WGS84 stopnie dziesiętne (`lat`: -90..90, `lng`: -180..180)
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: /api/v1
+    description: Lokalne środowisko Docker Sail
+
+tags:
+  - name: System
+    description: Kontrola żywotności usługi
+  - name: Accounts
+    description: Rejestracja, logowanie i profil zalogowanego użytkownika
+  - name: Trips
+    description: Zarządzanie podróżami
+  - name: Routes
+    description: Trasy i ślady GPX/polyline w ramach podróży
+  - name: Places
+    description: Miejsca (POI) przypisane do podróży
+  - name: Maps
+    description: Wyszukiwanie lokalizacji i podgląd tras
+  - name: Stats
+    description: Statystyki użytkownika
+  - name: PublicProfiles
+    description: Publiczne profile i udostępnione podróże
+
+paths:
+  /health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: Sprawdzenie żywotności API
+      security: []
+      responses:
+        '200':
+          description: Aplikacja działa poprawnie
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, timestamp]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: '2026-11-24T12:00:00Z'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/register:
+    post:
+      tags: [Accounts]
+      operationId: registerAccount
+      summary: Rejestracja nowego konta
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, username, email, password, password_confirmation]
+              properties:
+                name:
+                  type: string
+                  maxLength: 100
+                  example: Jan Kowalski
+                username:
+                  type: string
+                  pattern: '^[a-zA-Z0-9_]{3,30}$'
+                  example: jankowalski
+                email:
+                  type: string
+                  format: email
+                  example: jan@example.com
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+                  example: SecretPass123!
+                password_confirmation:
+                  type: string
+                  format: password
+                  example: SecretPass123!
+      responses:
+        '201':
+          description: Konto utworzone i zwrócony token dostępu
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/login:
+    post:
+      tags: [Accounts]
+      operationId: loginAccount
+      summary: Logowanie i pobranie tokenu Bearer
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: jan@example.com
+                password:
+                  type: string
+                  format: password
+                  example: SecretPass123!
+      responses:
+        '200':
+          description: Zalogowano pomyślnie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/logout:
+    post:
+      tags: [Accounts]
+      operationId: logoutAccount
+      summary: Wylogowanie (unieważnienie bieżącego tokenu)
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Wylogowano pomyślnie
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /me:
+    get:
+      tags: [Accounts]
+      operationId: getCurrentUser
+      summary: Pobranie danych zalogowanego użytkownika
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Dane konta
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Accounts]
+      operationId: updateCurrentUser
+      summary: Aktualizacja ustawień konta i widoczności profilu
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  maxLength: 100
+                  example: Jan Kowalski
+                bio:
+                  type: string
+                  nullable: true
+                  maxLength: 300
+                  example: Podróże po Europie i górskie trasy.
+                is_public:
+                  type: boolean
+                  example: true
+      responses:
+        '200':
+          description: Zaktualizowane dane konta
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+
+  /trips:
+    get:
+      tags: [Trips]
+      operationId: listTrips
+      summary: Lista podróży zalogowanego użytkownika (z paginacją)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PerPageParam'
+      responses:
+        '200':
+          description: Stronicowana lista podróży
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta, links]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Trip'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+                  links:
+                    $ref: '#/components/schemas/PaginationLinks'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Trips]
+      operationId: createTrip
+      summary: Utworzenie nowej podróży
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TripInput'
+      responses:
+        '201':
+          description: Podróż utworzona
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Trip'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+
+  /trips/{tripId}:
+    parameters:
+      - $ref: '#/components/parameters/TripIdParam'
+    get:
+      tags: [Trips]
+      operationId: getTrip
+      summary: Szczegóły pojedynczej podróży
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Szczegóły podróży
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Trip'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Trips]
+      operationId: updateTrip
+      summary: Edycja podróży
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TripInput'
+      responses:
+        '200':
+          description: Podróż zaktualizowana
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Trip'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+    delete:
+      tags: [Trips]
+      operationId: deleteTrip
+      summary: Usunięcie podróży
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Podróż usunięta
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /trips/{tripId}/routes:
+    parameters:
+      - $ref: '#/components/parameters/TripIdParam'
+    get:
+      tags: [Routes]
+      operationId: listTripRoutes
+      summary: Lista tras przypisanych do podróży
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista tras
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Route'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [Routes]
+      operationId: createTripRoute
+      summary: Dodanie trasy do podróży
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, distance_m, duration_s, encoded_polyline]
+              properties:
+                name:
+                  type: string
+                  example: Legnica - Skalne Miasto
+                distance_m:
+                  type: integer
+                  minimum: 0
+                  description: Dystans w metrach
+                  example: 94500
+                duration_s:
+                  type: integer
+                  minimum: 0
+                  description: Czas trwania w sekundach
+                  example: 5400
+                encoded_polyline:
+                  type: string
+                  description: Zakodowana ścieżka Google Encoded Polyline
+                  example: '_p~iF~ps|U_ulLnnqC_mqNvxq`@'
+      responses:
+        '201':
+          description: Trasa zapisana
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Route'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+
+  /trips/{tripId}/places:
+    parameters:
+      - $ref: '#/components/parameters/TripIdParam'
+    get:
+      tags: [Places]
+      operationId: listTripPlaces
+      summary: Lista miejsc odwiedzonych w podróży
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista miejsc
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Place'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [Places]
+      operationId: createTripPlace
+      summary: Dodanie miejsca (POI) do podróży
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, coordinates]
+              properties:
+                name:
+                  type: string
+                  example: Skalne Miasto Adršpach
+                notes:
+                  type: string
+                  nullable: true
+                  example: Najlepiej przyjechać przed 9:00.
+                visited_at:
+                  type: string
+                  format: date-time
+                  nullable: true
+                  example: '2026-07-12T08:30:00Z'
+                coordinates:
+                  $ref: '#/components/schemas/Coordinates'
+      responses:
+        '201':
+          description: Miejsce dodane
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Place'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+
+  /maps/search:
+    get:
+      tags: [Maps]
+      operationId: searchMapPlaces
+      summary: Wyszukiwanie lokalizacji (geokodowanie)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Fraza wyszukiwania
+          schema:
+            type: string
+            minLength: 2
+            example: Kraków
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 5
+      responses:
+        '200':
+          description: Wyniki wyszukiwania na mapie
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MapSearchResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /maps/route-preview:
+    post:
+      tags: [Maps]
+      operationId: previewMapRoute
+      summary: Wyznaczenie podglądu trasy między punktami
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [waypoints]
+              properties:
+                waypoints:
+                  type: array
+                  minItems: 2
+                  maxItems: 25
+                  items:
+                    $ref: '#/components/schemas/Coordinates'
+      responses:
+        '200':
+          description: Wyliczona trasa z dystansem i czasem
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [distance_m, duration_s, encoded_polyline]
+                    properties:
+                      distance_m:
+                        type: integer
+                        example: 265000
+                      duration_s:
+                        type: integer
+                        example: 10200
+                      encoded_polyline:
+                        type: string
+                        example: '_p~iF~ps|U_ulLnnqC_mqNvxq`@'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /stats/overview:
+    get:
+      tags: [Stats]
+      operationId: getStatsOverview
+      summary: Podsumowanie statystyk zalogowanego użytkownika
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Zagregowane statystyki podróży
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/UserStats'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /profiles/{username}:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+          example: jankowalski
+    get:
+      tags: [PublicProfiles]
+      operationId: getPublicProfile
+      summary: Pobranie publicznego profilu użytkownika
+      security: []
+      responses:
+        '200':
+          description: Dane publicznego profilu i statystyki
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/PublicProfile'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /profiles/{username}/trips:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+          example: jankowalski
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PerPageParam'
+    get:
+      tags: [PublicProfiles]
+      operationId: listPublicProfileTrips
+      summary: Lista publicznych podróży wybranego użytkownika
+      security: []
+      responses:
+        '200':
+          description: Stronicowana lista publicznych podróży
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta, links]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Trip'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+                  links:
+                    $ref: '#/components/schemas/PaginationLinks'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Sanctum
+
+  parameters:
+    TripIdParam:
+      name: tripId
+      in: path
+      required: true
+      description: Identyfikator podróży
+      schema:
+        type: integer
+        example: 42
+    PageParam:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PerPageParam:
+      name: per_page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 15
+
+  schemas:
+    Coordinates:
+      type: object
+      required: [lat, lng]
+      properties:
+        lat:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          description: Szerokość geograficzna (WGS84)
+          example: 51.2070
+        lng:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          description: Długość geograficzna (WGS84)
+          example: 16.1553
+
+    User:
+      type: object
+      required: [id, name, username, email, is_public, created_at]
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Jan Kowalski
+        username:
+          type: string
+          example: jankowalski
+        email:
+          type: string
+          format: email
+          example: jan@example.com
+        bio:
+          type: string
+          nullable: true
+          example: Podróże po Europie.
+        is_public:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-11-24T10:00:00Z'
+
+    AuthResponse:
+      type: object
+      required: [token, token_type, user]
+      properties:
+        token:
+          type: string
+          example: '1|laravel_sanctum_example_token_string'
+        token_type:
+          type: string
+          enum: [Bearer]
+          example: Bearer
+        user:
+          $ref: '#/components/schemas/User'
+
+    TripInput:
+      type: object
+      required: [title, visibility]
+      properties:
+        title:
+          type: string
+          maxLength: 150
+          example: Weekend w Karkonoszach
+        description:
+          type: string
+          nullable: true
+          example: Trasa górska i zwiedzanie okolicy.
+        visibility:
+          type: string
+          enum: [private, public]
+          example: public
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: '2026-10-20T08:00:00Z'
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: '2026-10-22T18:00:00Z'
+
+    Trip:
+      type: object
+      required: [id, title, visibility, total_distance_m, total_duration_s, created_at]
+      properties:
+        id:
+          type: integer
+          example: 42
+        title:
+          type: string
+          example: Weekend w Karkonoszach
+        description:
+          type: string
+          nullable: true
+          example: Trasa górska i zwiedzanie okolicy.
+        visibility:
+          type: string
+          enum: [private, public]
+          example: public
+        total_distance_m:
+          type: integer
+          description: Łączny dystans podróży w metrach
+          example: 145200
+        total_duration_s:
+          type: integer
+          description: Łączny czas przejazdów w sekundach
+          example: 7800
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: '2026-10-20T08:00:00Z'
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: '2026-10-22T18:00:00Z'
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-10-20T07:55:00Z'
+
+    Route:
+      type: object
+      required: [id, trip_id, name, distance_m, duration_s, encoded_polyline, created_at]
+      properties:
+        id:
+          type: integer
+          example: 101
+        trip_id:
+          type: integer
+          example: 42
+        name:
+          type: string
+          example: Legnica - Skalne Miasto
+        distance_m:
+          type: integer
+          description: Dystans w metrach
+          example: 94500
+        duration_s:
+          type: integer
+          description: Czas trwania w sekundach
+          example: 5400
+        encoded_polyline:
+          type: string
+          example: '_p~iF~ps|U_ulLnnqC_mqNvxq`@'
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-10-20T09:15:00Z'
+
+    Place:
+      type: object
+      required: [id, trip_id, name, coordinates, created_at]
+      properties:
+        id:
+          type: integer
+          example: 305
+        trip_id:
+          type: integer
+          example: 42
+        name:
+          type: string
+          example: Skalne Miasto Adršpach
+        notes:
+          type: string
+          nullable: true
+          example: Najlepiej przyjechać przed 9:00.
+        visited_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: '2026-07-12T08:30:00Z'
+        coordinates:
+          $ref: '#/components/schemas/Coordinates'
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-07-12T08:35:00Z'
+
+    MapSearchResult:
+      type: object
+      required: [label, coordinates]
+      properties:
+        label:
+          type: string
+          example: Kraków, województwo małopolskie, Polska
+        country_code:
+          type: string
+          nullable: true
+          example: PL
+        coordinates:
+          $ref: '#/components/schemas/Coordinates'
+
+    UserStats:
+      type: object
+      required: [trips_count, places_count, total_distance_m, total_duration_s]
+      properties:
+        trips_count:
+          type: integer
+          example: 12
+        places_count:
+          type: integer
+          example: 47
+        total_distance_m:
+          type: integer
+          description: Łączny dystans w metrach
+          example: 1842500
+        total_duration_s:
+          type: integer
+          description: Łączny czas w sekundach
+          example: 92400
+
+    PublicProfile:
+      type: object
+      required: [username, name, stats]
+      properties:
+        username:
+          type: string
+          example: jankowalski
+        name:
+          type: string
+          example: Jan Kowalski
+        bio:
+          type: string
+          nullable: true
+          example: Podróże po Europie.
+        stats:
+          $ref: '#/components/schemas/UserStats'
+
+    PaginationMeta:
+      type: object
+      required: [current_page, last_page, per_page, total]
+      properties:
+        current_page:
+          type: integer
+          example: 1
+        last_page:
+          type: integer
+          example: 3
+        per_page:
+          type: integer
+          example: 15
+        total:
+          type: integer
+          example: 38
+
+    PaginationLinks:
+      type: object
+      required: [first, last]
+      properties:
+        first:
+          type: string
+          format: uri
+          example: 'http://localhost/api/v1/trips?page=1'
+        last:
+          type: string
+          format: uri
+          example: 'http://localhost/api/v1/trips?page=3'
+        prev:
+          type: string
+          format: uri
+          nullable: true
+          example: null
+        next:
+          type: string
+          format: uri
+          nullable: true
+          example: 'http://localhost/api/v1/trips?page=2'
+
+    ErrorResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          example: Validation failed.
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          example:
+            email:
+              - The email field must be a valid email address.
+
+  responses:
+    Unauthorized:
+      description: Brak lub nieprawidłowy token autoryzacyjny
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            message: Unauthenticated.
+    Forbidden:
+      description: Brak uprawnień do zasobu
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            message: This action is unauthorized.
+    NotFound:
+      description: Zasób nie został znaleziony
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            message: Not Found.
+    Conflict:
+      description: Konflikt stanu zasobu (np. duplikat)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            message: Resource already exists.
+    UnprocessableEntity:
+      description: Błąd walidacji danych wejściowych
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            message: The given data was invalid.
+            errors:
+              title:
+                - The title field is required.
+    TooManyRequests:
+      description: Przekroczono limit zapytań
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            message: Too Many Attempts.
+    ServiceUnavailable:
+      description: Usługa lub dostawca zewnętrzny tymczasowo niedostępny
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            message: Service temporarily unavailable.
