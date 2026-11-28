@@ -6,8 +6,7 @@ use Tests\TestCase;
 
 class HealthTest extends TestCase
 {
-    /** @test */
-    public function it_returns_health_status_with_valid_timestamp(): void
+    public function test_it_returns_health_status_with_valid_timestamp(): void
     {
         $response = $this->getJson('/api/v1/health');
 
@@ -27,8 +26,7 @@ class HealthTest extends TestCase
         );
     }
 
-    /** @test */
-    public function it_returns_json_404_on_invalid_api_route(): void
+    public function test_it_returns_json_404_on_invalid_api_route(): void
     {
         $response = $this->getJson('/api/v1/invalid-route');
 
